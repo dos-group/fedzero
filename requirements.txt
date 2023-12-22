@@ -1,0 +1,17 @@
+pandas
+numpy
+click
+flwr[simulation]==1.6.0
+torch
+tensorboard
+vessim==0.3.0  # energy system simulator
+gurobipy==10.0.0  # mip solver
+
+# CIFAR100 + TinyImageNet experiment
+torchvision
+# Shakespeare experiment
+torchtext
+# Google Speech experiment
+librosa
+einops
+audiomentations
