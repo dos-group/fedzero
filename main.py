@@ -41,7 +41,7 @@ class Experiment:
         else:
             aggregation_strategy = "FedAvg"
         iid_str = "noniid" if self.beta is None else f"b={self.beta:.1f}"
-        scenario_str = self.scenario.solar_scenario if self.scenario.constraints() != "no_constr" else "no_constr"
+        scenario_str = "no_constr" if self.scenario.unconstrained else self.scenario.solar_scenario
         imbalanced_str = "_imbalanced" if self.scenario.imbalanced_scenario else ""
         overselect_str = f"_{self.overselect:.1f}K" if self.overselect > 1 else ""
         error_str = ""
@@ -176,7 +176,7 @@ def simulate_fl_training(experiment: Experiment, device: torch.device, mock: boo
                            strategy=strategy,
                            writer=writer)
 
-    flwr.fedzero.start_simulation(
+    flwr.simulation.start_simulation(
         client_fn=client_fn,
         clients_ids=[c.name for c in experiment.scenario.client_load_api.get_clients()],
         server=server,

@@ -3,10 +3,11 @@ import time
 from typing import Callable, Tuple
 
 import torch
-from fedzero.kwt.utils.misc import log, save_model
 from torch import nn, optim
 from torch.utils.data import DataLoader
 from tqdm import tqdm
+
+from fedzero.kwt.utils.misc import log, save_model
 
 
 def train_single_batch(net: nn.Module, data: torch.Tensor, targets: torch.Tensor, optimizer: optim.Optimizer, criterion: Callable, device: torch.device) -> Tuple[float, int]:

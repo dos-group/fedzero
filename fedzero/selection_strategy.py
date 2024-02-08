@@ -61,7 +61,7 @@ class RandomSelectionStrategy(SelectionStrategy):
         """Selects <CLIENTS_PER_ROUND> randomly if they have energy and capacity"""
         clients = _filterby_current_capacity_and_energy(power_domain_api, client_load_api, now)
         if self.use_forecasts:
-            clients = _filterby_forecasted_capacity_and_energy(power_domain_api, client_load_api, clients, now, 60, self.min_epochs)
+            clients = _filterby_forecasted_capacity_and_energy(power_domain_api, client_load_api, clients, now, int(MAX_ROUND_IN_MIN / TIMESTEP_IN_MIN), self.min_epochs)
         if len(clients) < self.clients_per_round:
             return None
 
@@ -260,8 +260,7 @@ def _estimate_duration_based_on_forecast(required_batches, fc):
 def _filterby_current_capacity_and_energy(power_domain_api: PowerDomainApi,
                                           client_load_api: ClientLoadApi,
                                           now: datetime) -> List[Client]:
-    # TODO zones
-    zones_with_energy = [zone for zone in power_domain_api.zones() if power_domain_api.actual(now, zone) > 0.0]
+    zones_with_energy = [zone for zone in power_domain_api.zones if power_domain_api.actual(now, zone) > 0.0]
     clients = [client for client in client_load_api.get_clients(zones_with_energy) if client_load_api.actual(now, client.name) > 0.0]
     print(f"There are {len(clients)} clients available across {len(zones_with_energy)} power domains.")
     return clients

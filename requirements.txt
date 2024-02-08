@@ -1,13 +1,15 @@
+# general
 pandas
 numpy
 click
+vessim==0.4.0
 flwr[simulation]==1.6.0
 torch
-tensorboard
-vessim==0.3.0  # energy system simulator
-gurobipy==10.0.0  # mip solver
 
-# CIFAR100 + TinyImageNet experiment
+# optimization
+gurobipy==10.0.0
+
+# CIFAR100 + TinyImageNet experiments
 torchvision
 # Shakespeare experiment
 torchtext
@@ -15,3 +17,11 @@ torchtext
 librosa
 einops
 audiomentations
+
+# Analysis
+jupyterlab
+matplotlib==3.6
+seaborn==0.12.2
+streamlit
+tensorboard
+tbparse

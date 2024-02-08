@@ -5,8 +5,9 @@ import random
 
 import numpy as np
 import torch
-from fedzero.kwt.models.kwt import KWT, kwt_from_name
 from torch import nn, optim
+
+from fedzero.kwt.models.kwt import KWT, kwt_from_name
 
 
 def seed_everything(seed: str) -> None:

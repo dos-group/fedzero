@@ -142,8 +142,8 @@ class FedZeroServer(Server):
             self.writer.add_scalar("energy/round", round_energy, **tb_props)
 
             # Report energy per domain
-            round_energy_per_domain_round = {zone: 0.0 for zone in self.power_domain_api.zones()}
-            for zone in self.power_domain_api.zones():
+            round_energy_per_domain_round = {zone: 0.0 for zone in self.power_domain_api.zones}
+            for zone in self.power_domain_api.zones:
                 clients_in_zone = [client for client in self.client_load_api.get_clients() if client.zone == zone]
                 self.writer.add_scalar(f"energy_per_domain/{zone}", _ws_to_kwh(sum(client.participated_batches * client.energy_per_batch for client in clients_in_zone)), **tb_props)
                 for c in clients_in_zone:

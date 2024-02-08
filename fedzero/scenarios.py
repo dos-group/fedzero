@@ -1,8 +1,9 @@
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import List, Dict
+from typing import List, Dict, Union
 
 import pandas as pd
+from vessim.signal import HistoricalSignal
 
 from fedzero.config import TIMESTEP_IN_MIN, SOLAR_SIZE, MAX_TIME_IN_DAYS, BATCH_SIZE
 from fedzero.entities import Client, ClientLoadApi, PowerDomainApi
@@ -22,19 +23,8 @@ class Scenario:
     end_date: datetime
     solar_scenario: str
     forecast_error: str
+    unconstrained: Union[bool, List[str]]
     imbalanced_scenario: bool
-    resource_constraints: bool
-    energy_constraints: bool
-
-    def constraints(self):
-        if self.resource_constraints:
-            if self.energy_constraints:
-                return "r&e_constr"
-            else:
-                return "r_constr"
-        else:
-            return "no_constr"
-
 
 def get_scenario(solar_scenario: str,
                  net_arch_size_factor: float,
@@ -55,69 +45,38 @@ def get_scenario(solar_scenario: str,
             f"max power/timestep: {max_power_per_timestep:.0f} Ws"
         )
 
-    resource_constraints = True
-    energy_constraints = True
+    unconstrained: Union[bool, List[str]] = False
     if solar_scenario == "unconstrained":
         solar_scenario = "global"
-        resource_constraints = False
-        energy_constraints = False
-
+        unconstrained = True
+    if imbalanced_scenario:
+        unconstrained = ["Berlin"]
     start_date, end_date = _load_start_end_date(solar_scenario)
 
     print("Load solar data...")
-    power_domains_time_series = _load_solar_time_series_api(solar_scenario, forecast_error, energy_constraints,
-                                                            imbalanced_scenario)
+    dataset = f"solcast2022_{solar_scenario}"
+    power_domain_api = PowerDomainApi(
+        HistoricalSignal.from_dataset(dataset, params={"scale":SOLAR_SIZE, "use_forecast":(forecast_error != "no_error")}), unconstrained=unconstrained)
 
     print("Load client load data...")
-    clients_time_series = _load_client_time_series_api(start_date, end_date, client_sizes,
-                                                       power_domains_time_series.zones(), forecast_error,
-                                                       resource_constraints, imbalanced_scenario)
+    clients_time_series = _load_client_time_series_api(start_date, end_date, client_sizes, power_domain_api.zones, forecast_error,
+                                                        unconstrained, imbalanced_scenario)
 
-    return Scenario(power_domain_api=power_domains_time_series,
+    return Scenario(power_domain_api=power_domain_api,
                     client_load_api=clients_time_series,
                     start_date=start_date,
                     end_date=end_date,
                     solar_scenario=solar_scenario,
                     forecast_error=forecast_error,
-                    imbalanced_scenario=imbalanced_scenario,
-                    resource_constraints=resource_constraints,
-                    energy_constraints=energy_constraints)
-
-
-def _load_solar_time_series_api(solar_scenario: str,
-                                forecast_error: str = "no_error",
-                                energy_constraints=True,
-                                imbalanced_scenario=False) -> PowerDomainApi:
-    # load actual data
-    solar_actual = pd.read_csv(f"./data/solar/solcast2022_{solar_scenario}_actual.csv",
-                               parse_dates=True, index_col=[0, 1])["actual"]
-    solar_actual = (solar_actual * SOLAR_SIZE).unstack(level=0)
-    if not energy_constraints:
-        solar_actual[:] = 1000000000000
-    if imbalanced_scenario:
-        solar_actual["berlin"] = 1000000000000
-
-    # load forecast data
-    if forecast_error == "no_error":
-        solar_forecast = None
-    else:
-        solar_forecast = pd.read_csv(f"./data/solar/solcast2022_{solar_scenario}_forecast_1h.csv",
-                                     parse_dates=True, index_col=[0, 1, 2])["median"]
-        solar_forecast = (solar_forecast * SOLAR_SIZE).unstack(level=0)
-        if not energy_constraints:
-            solar_forecast[:] = 1000000000000
-        if imbalanced_scenario:
-            solar_forecast["berlin"] = 1000000000000
-
-    return PowerDomainApi(solar_actual, solar_forecast, fill_method="bfill")
-
+                    unconstrained=unconstrained,
+                    imbalanced_scenario=imbalanced_scenario)
 
 def _load_client_time_series_api(start_date: datetime, end_date: datetime,
                                  client_sizes: Dict[str, Dict[str, float]],
                                  power_domain_zones: List[str],
                                  forecast_error: str = "no_error",
-                                 resource_constraints=True,
-                                 imbalanced_scenario=False) -> ClientLoadApi:
+                                 unconstrained: Union[bool, List[str]] = False,
+                                 imbalanced_scenario: bool = False) -> ClientLoadApi:
     # Load Client information
     clients_data = pd.read_csv("data/clients.csv")
     client_names = clients_data.apply(lambda row: f"{row.name}_{power_domain_zones[row['power_domain']]}_{row['size']}", axis=1)
@@ -137,9 +96,7 @@ def _load_client_time_series_api(start_date: datetime, end_date: datetime,
     client_load = pd.read_csv("data/client_load_gpu_used.csv", nrows=len(index)) / 100
     client_load.set_index(index, inplace=True)
     client_load = client_load.set_axis(client_names, axis=1)
-    if not resource_constraints:
-        client_load[:] = 0
-
+    
     # Load forecast data
     if forecast_error == "no_error":
         client_load_reserved = None
@@ -147,17 +104,10 @@ def _load_client_time_series_api(start_date: datetime, end_date: datetime,
         client_load_reserved = (pd.read_csv("data/client_load_gpu_reserved.csv", nrows=len(index)) / 100)
         client_load_reserved.set_index(index, inplace=True)
         client_load_reserved = client_load_reserved.set_axis(client_names, axis=1)
-        if forecast_error == "error_no_load_fc" or not resource_constraints:
+        if forecast_error == "error_no_load_fc":
             client_load_reserved[:] = 0
 
-    # Set load to zero for clients in Berlin if imbalanced scenario is set
-    if imbalanced_scenario:
-        for i, c in clients_data[clients_data["power_domain"] == "Berlin"].iterrows():
-            client_load[:, i] = 0
-            if client_load_reserved is not None:
-                client_load_reserved[:, i] = 0
-
-    return ClientLoadApi(clients, client_load, client_load_reserved)
+    return ClientLoadApi(clients, HistoricalSignal(client_load, client_load_reserved, fill_method="bfill"), unconstrained=unconstrained)
 
 
 def _load_start_end_date(dataset: str):

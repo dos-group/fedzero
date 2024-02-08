@@ -11,12 +11,12 @@ import torch
 import torch.utils.model_zoo as model_zoo
 import torchvision
 import torchvision.transforms as transforms
-from fedzero.kwt.utils.dataset import get_loader
 from scipy.special import softmax
 from torch.utils.data import Dataset, DataLoader, random_split, SubsetRandomSampler
 from tqdm import tqdm
 
 from fedzero.config import NIID_DATA_SEED
+from fedzero.kwt.utils.dataset import get_loader
 
 ALL_LETTERS = " ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 

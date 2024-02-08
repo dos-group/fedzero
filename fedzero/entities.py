@@ -1,9 +1,9 @@
 import math
 from datetime import datetime, timedelta
-from typing import Dict, Optional, List
+from typing import Dict, Optional, List, Union
 
 import pandas as pd
-from vessim import TimeSeriesApi
+from vessim.signal import HistoricalSignal
 
 from fedzero.config import BATCH_SIZE, TIMESTEP_IN_MIN
 
@@ -50,10 +50,17 @@ class Client:
             return False
 
 
-class ClientLoadApi(TimeSeriesApi):
-    def __init__(self, clients: List[Client], actual: pd.DataFrame, forecast: Optional[pd.DataFrame] = None):
-        super().__init__(actual, forecast, fill_method="bfill")
+class ClientLoadApi:
+    def __init__(self, clients: List[Client], signal: HistoricalSignal, unconstrained: Union[bool, List[str]] = False):
+        self.signal = signal
         self._clients = {c.name: c for c in clients}
+        if isinstance(unconstrained, list):
+            self._unconstrained = [client.name for client in clients if client.zone in unconstrained]
+        elif unconstrained:
+            self._unconstrained = [client.name for client in clients]
+        else:
+            self._unconstrained = []
+        self.signal = signal
 
     def get_clients(self, zones: Optional[List[str]] = None) -> List[Client]:
         """Returs the names of clients present in one of the zones as list."""
@@ -63,22 +70,44 @@ class ClientLoadApi(TimeSeriesApi):
 
     def actual(self, dt: datetime, client_name: str) -> float:
         """Returns the actual amount of batches than can be computed during the next timestep."""
-        # TODO fedzero crashes with "Cannot retrieve actual data at '2022-06-15 00:00:00' in zone '56_Hong Kong_mid'."
-        return (1 - super().actual(dt, zone=client_name)) * self._clients[client_name].batches_per_timestep
+        if client_name in self._unconstrained:
+            return self._clients[client_name].batches_per_timestep
+        return (1 - self.signal.at(dt, column=client_name)) * self._clients[client_name].batches_per_timestep
 
     def forecast(self, now: datetime, duration_in_timesteps: int, client_name: str) -> pd.Series:
         """Returns the forecasted amount of batches than can be computed during the next timesteps."""
-        return (1 - super().forecast(now, now + timedelta(minutes=TIMESTEP_IN_MIN * duration_in_timesteps),
-                                     zone=client_name, frequency=f"{TIMESTEP_IN_MIN}T",
+        forecast = (1 - self.signal.forecast(now, now + timedelta(minutes=TIMESTEP_IN_MIN * duration_in_timesteps),
+                                     column=client_name, frequency=f"{TIMESTEP_IN_MIN}T",
                                      resample_method="bfill")) * self._clients[client_name].batches_per_timestep
+        if client_name in self._unconstrained:
+            forecast[:] = self._clients[client_name].batches_per_timestep
+        return forecast
 
 
-class PowerDomainApi(TimeSeriesApi):
+class PowerDomainApi:
+    def __init__(self, signal: HistoricalSignal, unconstrained: Union[bool, List[str]] = False):
+        self.signal = signal
+        if isinstance(unconstrained, list):
+            self._unconstrained = unconstrained
+        elif unconstrained:
+            self._unconstrained = self.zones
+        else:
+            self._unconstrained = []
+
+    @property
+    def zones(self) -> List[str]:
+        return self.signal.columns()
+
     def actual(self, dt: datetime, zone: str) -> float:
         """Returns the actual Ws available during the next timestep."""
-        return super().actual(dt, zone=zone) * 60 * TIMESTEP_IN_MIN
-
+        if zone in self._unconstrained:
+            return 1000000000000.0
+        return self.signal.at(dt, column=zone) * 60 * TIMESTEP_IN_MIN
+    
     def forecast(self, start_time: datetime, duration_in_timesteps: int, zone: str) -> pd.Series:
         """Returns the forecasted Ws available during the next timesteps."""
-        return (super().forecast(start_time, start_time + timedelta(minutes=TIMESTEP_IN_MIN * duration_in_timesteps),
-                zone=zone, frequency=f"{TIMESTEP_IN_MIN}T", resample_method="bfill") * 60 * TIMESTEP_IN_MIN)
+        forecast = (self.signal.forecast(start_time, start_time + timedelta(minutes=TIMESTEP_IN_MIN * duration_in_timesteps),
+                column=zone, frequency=f"{TIMESTEP_IN_MIN}T", resample_method="bfill") * 60 * TIMESTEP_IN_MIN)
+        if zone in self._unconstrained:
+            forecast[:] = 1000000000000.0
+        return forecast
