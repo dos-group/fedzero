@@ -1,8 +1,12 @@
 # FedZero
 
-Philipp Wiesner, Ramin Khalili, Dennis Grinwald, Pratik Agrawal, Lauritz Thamsen, and Odej Kao.
-"[FedZero: Leveraging Renewable Excess Energy in Federated Learning.](https://arxiv.org/pdf/2305.15092.pdf)"
-15th ACM International Conference on Future and Sustainable Energy Systems (e-Energy). 2023.
+Official repository for the paper "[FedZero: Leveraging Renewable Excess Energy in Federated Learning.](https://arxiv.org/pdf/2305.15092.pdf)" to be presented at the 15th ACM International Conference on Future and Sustainable Energy Systems (e-Energy), 2024
+
+The implementation uses:
+
+- [Flower](https://flower.ai/) and [PyTorch](https://pytorch.org/) for implementing federated learning
+- [Vessim](https://github.com/dos-group/vessim) for simulating the client's energy systems
+- [Gurobi](https://www.gurobi.com/) for solving optimization problems
 
 ## Installation
 
