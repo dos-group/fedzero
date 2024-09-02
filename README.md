@@ -1,6 +1,6 @@
 # FedZero
 
-Official repository for the paper "[FedZero: Leveraging Renewable Excess Energy in Federated Learning.](https://arxiv.org/pdf/2305.15092.pdf)" to be presented at the 15th ACM International Conference on Future and Sustainable Energy Systems (e-Energy), 2024
+Official repository for the paper "[FedZero: Leveraging Renewable Excess Energy in Federated Learning.](https://arxiv.org/pdf/2305.15092.pdf)" presented at e-Energy'2024. FedZero is an FL system that operates exclusively on renewable excess energy and spare capacity of compute infrastructure to effectively reduce a training’s operational carbon emissions to zero.
 
 The implementation uses:
 
