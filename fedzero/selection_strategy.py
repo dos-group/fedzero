@@ -196,7 +196,7 @@ class FedZeroSelectionStrategy(SelectionStrategy):
         selected_clients = pd.Series([var.X for var in b.values()], index=b.keys()).sort_index()
         df = df[np.isclose(selected_clients, 1)]
 
-        df.columns = pd.date_range(start=now + pd.DateOffset(minutes=TIMESTEP_IN_MIN), periods=d, freq=f"{TIMESTEP_IN_MIN}T")
+        df.columns = pd.date_range(start=now + pd.DateOffset(minutes=TIMESTEP_IN_MIN), periods=d, freq=f"{TIMESTEP_IN_MIN}min")
         return df.sort_index()
 
 

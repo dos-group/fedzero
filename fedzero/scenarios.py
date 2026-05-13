@@ -1,12 +1,13 @@
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import List, Dict, Union
+from typing import Dict, List, Union
 
 import pandas as pd
-from vessim.signal import HistoricalSignal
+import vessim as vs
 
 from fedzero.config import TIMESTEP_IN_MIN, SOLAR_SIZE, MAX_TIME_IN_DAYS, BATCH_SIZE
 from fedzero.entities import Client, ClientLoadApi, PowerDomainApi
+from fedzero.forecast import Forecast, load_solcast
 
 _GLOBAL_START = pd.to_datetime("2022-06-08 00:00:00")
 _GLOBAL_END = _GLOBAL_START + timedelta(days=MAX_TIME_IN_DAYS, minutes=-TIMESTEP_IN_MIN)
@@ -25,6 +26,7 @@ class Scenario:
     forecast_error: str
     unconstrained: Union[bool, List[str]]
     imbalanced_scenario: bool
+
 
 def get_scenario(solar_scenario: str,
                  net_arch_size_factor: float,
@@ -54,16 +56,25 @@ def get_scenario(solar_scenario: str,
     start_date, end_date = _load_start_end_date(solar_scenario)
 
     print("Load solar data...")
-    dataset = f"solcast2022_{solar_scenario}"
+    use_forecast = forecast_error != "no_error"
+    solar_actuals, solar_forecast = load_solcast(
+        solar_scenario, scale=SOLAR_SIZE, use_forecast=use_forecast
+    )
     power_domain_api = PowerDomainApi(
-        HistoricalSignal.from_dataset(dataset, params={"scale":SOLAR_SIZE, "use_forecast":(forecast_error != "no_error")}), unconstrained=unconstrained)
+        actuals=solar_actuals,
+        sim_start=start_date,
+        forecast=solar_forecast,
+        unconstrained=unconstrained,
+    )
 
     print("Load client load data...")
-    clients_time_series = _load_client_time_series_api(start_date, end_date, client_sizes, power_domain_api.zones, forecast_error,
-                                                        unconstrained, imbalanced_scenario)
+    client_load_api = _load_client_time_series_api(
+        start_date, end_date, client_sizes, power_domain_api.zones,
+        forecast_error, unconstrained, imbalanced_scenario,
+    )
 
     return Scenario(power_domain_api=power_domain_api,
-                    client_load_api=clients_time_series,
+                    client_load_api=client_load_api,
                     start_date=start_date,
                     end_date=end_date,
                     solar_scenario=solar_scenario,
@@ -92,22 +103,33 @@ def _load_client_time_series_api(start_date: datetime, end_date: datetime,
                               energy_per_batch=client_sizes[client["size"]]["energy_per_batch"]))
 
     # Load actual data
-    index = pd.date_range(start_date, end_date, freq=f"{TIMESTEP_IN_MIN}T")
+    index = pd.date_range(start_date, end_date, freq=f"{TIMESTEP_IN_MIN}min")
     client_load = pd.read_csv("data/client_load_gpu_used.csv", nrows=len(index)) / 100
     client_load.set_index(index, inplace=True)
     client_load = client_load.set_axis(client_names, axis=1)
-    
-    # Load forecast data
-    if forecast_error == "no_error":
-        client_load_reserved = None
-    else:
+
+    actuals = {
+        name: vs.Trace(client_load[name], anchor=client_load.index[0], fill_method="bfill")
+        for name in client_names
+    }
+
+    # Note: the "reserved" capacity table is treated as a static forecast (same predictions regardless of when they're queried)
+    forecast = None
+    if forecast_error != "no_error":
         client_load_reserved = (pd.read_csv("data/client_load_gpu_reserved.csv", nrows=len(index)) / 100)
         client_load_reserved.set_index(index, inplace=True)
         client_load_reserved = client_load_reserved.set_axis(client_names, axis=1)
         if forecast_error == "error_no_load_fc":
             client_load_reserved[:] = 0
+        forecast = Forecast(client_load_reserved)
 
-    return ClientLoadApi(clients, HistoricalSignal(client_load, client_load_reserved, fill_method="bfill"), unconstrained=unconstrained)
+    return ClientLoadApi(
+        clients,
+        actuals=actuals,
+        sim_start=start_date,
+        forecast=forecast,
+        unconstrained=unconstrained,
+    )
 
 
 def _load_start_end_date(dataset: str):

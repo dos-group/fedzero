@@ -1,11 +1,12 @@
 import math
 from datetime import datetime, timedelta
-from typing import Dict, Optional, List, Union
+from typing import Dict, List, Optional, Union
 
 import pandas as pd
-from vessim.signal import HistoricalSignal
+import vessim as vs
 
 from fedzero.config import BATCH_SIZE, TIMESTEP_IN_MIN
+from fedzero.forecast import Forecast
 
 
 class Client:
@@ -28,7 +29,7 @@ class Client:
         return f"Client({self.name})"
 
     def __lt__(self, other):  # Sortable as we use instances of this class for DataFrame indexing
-        return self.name < other.name 
+        return self.name < other.name
 
     def record_usage(self, computed_batches: int) -> None:
         if computed_batches > 0:
@@ -51,42 +52,83 @@ class Client:
 
 
 class ClientLoadApi:
-    def __init__(self, clients: List[Client], signal: HistoricalSignal, unconstrained: Union[bool, List[str]] = False):
-        self.signal = signal
+    """Per-client GPU-load adapter for the FL scheduler.
+
+    Wraps one `vs.Trace` per client (the "fraction GPU busy with non-FL
+    workload" signal) plus an optional archived `Forecast`. Translates
+    `(now, client_name)` queries into "available batches per timestep",
+    the unit the LP and runtime simulator operate in.
+    """
+
+    def __init__(
+        self,
+        clients: List[Client],
+        actuals: Dict[str, vs.Trace],
+        sim_start: datetime,
+        forecast: Optional[Forecast] = None,
+        unconstrained: Union[bool, List[str]] = False,
+    ):
+        self._actuals = actuals
+        self._forecast = forecast
+        self._sim_start = pd.Timestamp(sim_start)
         self._clients = {c.name: c for c in clients}
         if isinstance(unconstrained, list):
-            self._unconstrained = [client.name for client in clients if client.zone in unconstrained]
+            self._unconstrained = [c.name for c in clients if c.zone in unconstrained]
         elif unconstrained:
-            self._unconstrained = [client.name for client in clients]
+            self._unconstrained = list(self._clients.keys())
         else:
             self._unconstrained = []
-        self.signal = signal
 
     def get_clients(self, zones: Optional[List[str]] = None) -> List[Client]:
-        """Returs the names of clients present in one of the zones as list."""
+        """Returns the clients present in one of the zones as list."""
         if zones is None:
             return list(self._clients.values())
-        return [client for client in self._clients.values() if client.zone in zones]
+        return [c for c in self._clients.values() if c.zone in zones]
 
     def actual(self, dt: datetime, client_name: str) -> float:
         """Returns the actual amount of batches than can be computed during the next timestep."""
+        bpt = self._clients[client_name].batches_per_timestep
         if client_name in self._unconstrained:
-            return self._clients[client_name].batches_per_timestep
-        return (1 - self.signal.at(dt, column=client_name)) * self._clients[client_name].batches_per_timestep
+            return bpt
+        elapsed = (pd.Timestamp(dt) - self._sim_start).total_seconds()
+        return (1 - self._actuals[client_name].at(elapsed)) * bpt
 
     def forecast(self, now: datetime, duration_in_timesteps: int, client_name: str) -> pd.Series:
         """Returns the forecasted amount of batches than can be computed during the next timesteps."""
-        forecast = (1 - self.signal.forecast(now, now + timedelta(minutes=TIMESTEP_IN_MIN * duration_in_timesteps),
-                                     column=client_name, frequency=f"{TIMESTEP_IN_MIN}T",
-                                     resample_method="bfill")) * self._clients[client_name].batches_per_timestep
+        bpt = self._clients[client_name].batches_per_timestep
+        step = timedelta(minutes=TIMESTEP_IN_MIN)
+        end = now + step * duration_in_timesteps
+        ts = pd.date_range(start=pd.Timestamp(now) + step, end=pd.Timestamp(end), freq=step)
         if client_name in self._unconstrained:
-            forecast[:] = self._clients[client_name].batches_per_timestep
-        return forecast
+            return pd.Series(bpt, index=ts)
+        if self._forecast is not None:
+            load = self._forecast.window(now, start=now, end=end, freq=step, column=client_name, fill="bfill")
+        else:
+            offsets = [(t - self._sim_start).total_seconds() for t in ts]
+            load = pd.Series([self._actuals[client_name].at(o) for o in offsets], index=ts)
+        return (1 - load) * bpt
 
 
 class PowerDomainApi:
-    def __init__(self, signal: HistoricalSignal, unconstrained: Union[bool, List[str]] = False):
-        self.signal = signal
+    """Per-zone solar adapter for the FL scheduler.
+
+    Wraps one `vs.Trace` per zone plus an optional archived `Forecast`.
+    Translates `(now, zone)` queries into "Ws available per timestep", the
+    energy unit the LP operates in (`power_W * 60 * TIMESTEP_IN_MIN`).
+    """
+
+    _UNCONSTRAINED_VALUE = 1_000_000_000_000.0
+
+    def __init__(
+        self,
+        actuals: Dict[str, vs.Trace],
+        sim_start: datetime,
+        forecast: Optional[Forecast] = None,
+        unconstrained: Union[bool, List[str]] = False,
+    ):
+        self._actuals = actuals
+        self._forecast = forecast
+        self._sim_start = pd.Timestamp(sim_start)
         if isinstance(unconstrained, list):
             self._unconstrained = unconstrained
         elif unconstrained:
@@ -96,18 +138,25 @@ class PowerDomainApi:
 
     @property
     def zones(self) -> List[str]:
-        return self.signal.columns()
+        return list(self._actuals.keys())
 
     def actual(self, dt: datetime, zone: str) -> float:
         """Returns the actual Ws available during the next timestep."""
         if zone in self._unconstrained:
-            return 1000000000000.0
-        return self.signal.at(dt, column=zone) * 60 * TIMESTEP_IN_MIN
-    
+            return self._UNCONSTRAINED_VALUE
+        elapsed = (pd.Timestamp(dt) - self._sim_start).total_seconds()
+        return self._actuals[zone].at(elapsed) * 60 * TIMESTEP_IN_MIN
+
     def forecast(self, start_time: datetime, duration_in_timesteps: int, zone: str) -> pd.Series:
         """Returns the forecasted Ws available during the next timesteps."""
-        forecast = (self.signal.forecast(start_time, start_time + timedelta(minutes=TIMESTEP_IN_MIN * duration_in_timesteps),
-                column=zone, frequency=f"{TIMESTEP_IN_MIN}T", resample_method="bfill") * 60 * TIMESTEP_IN_MIN)
+        step = timedelta(minutes=TIMESTEP_IN_MIN)
+        end = start_time + step * duration_in_timesteps
+        ts = pd.date_range(start=pd.Timestamp(start_time) + step, end=pd.Timestamp(end), freq=step)
         if zone in self._unconstrained:
-            forecast[:] = 1000000000000.0
-        return forecast
+            return pd.Series(self._UNCONSTRAINED_VALUE, index=ts)
+        if self._forecast is not None:
+            power = self._forecast.window(start_time, start=start_time, end=end, freq=step, column=zone, fill="bfill")
+        else:
+            offsets = [(t - self._sim_start).total_seconds() for t in ts]
+            power = pd.Series([self._actuals[zone].at(o) for o in offsets], index=ts)
+        return power * 60 * TIMESTEP_IN_MIN
